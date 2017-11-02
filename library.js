@@ -2,6 +2,7 @@
 
 /* globals process, require, module */
 
+var restApi = require('./rest-api-client')('https://api-dev.tickertocker.com/api/v1/');
 var meta = module.parent.require('./meta');
 var user = module.parent.require('./user');
 var SocketPlugins = require.main.require('./src/socket.io/plugins');
@@ -12,7 +13,7 @@ var async = require('async');
 var db = module.parent.require('./database');
 var nconf = module.parent.require('nconf');
 
-var jwt = require('jsonwebtoken');
+// var jwt = require('jsonwebtoken');
 
 var controllers = require('./lib/controllers');
 var nbbAuthController = module.parent.require('./controllers/authentication');
@@ -40,9 +41,8 @@ var plugin = {
 	ready: false,
 	settings: {
 		name: 'appId',
-		cookieName: 'token',
+		cookieName: 'tickectocker_auth',
 		cookieDomain: undefined,
-		secret: '',
 		behaviour: 'trust',
 		noRegistration: 'off',
 		payloadParent: undefined
@@ -131,14 +131,30 @@ plugin.getUser = function (remoteId, callback) {
 };
 
 plugin.process = function (token, callback) {
+	restApi.setToken(token);
+
 	async.waterfall([
-		async.apply(jwt.verify, token, plugin.settings.secret),
+		async.apply(verifyToken, token),
 		async.apply(plugin.normalizePayload),
 		async.apply(plugin.findOrCreateUser),
 		async.apply(plugin.updateUserProfile),
 		async.apply(plugin.verifyUser)
 	], callback);
 };
+
+function verifyToken(token, callback) {
+	console.log('verify user', token);
+
+	restApi.currentUser()
+		.then(function (response) {
+			console.log(response.data.result);
+			callback(null, response.data.result);
+		})
+		.catch(function (err) {
+			console.error(err);
+			callback(new Error('User does not exist.'));
+		});
+}
 
 plugin.normalizePayload = function (payload, callback) {
 	var userData = {};
@@ -197,7 +213,9 @@ plugin.findOrCreateUser = function (userData, callback) {
 	queries.uid = async.apply(db.sortedSetScore, plugin.settings.name + ':uid', userData.id);
 
 	async.parallel(queries, function (err, checks) {
-		if (err) { return callback(err); }
+		if (err) {
+			return callback(err);
+		}
 
 		async.waterfall([
 			/* check if found something to work with */
@@ -296,7 +314,9 @@ plugin.createUser = function (userData, callback) {
 	winston.verbose('[session-sharing] No user found, creating a new user for this login');
 
 	user.create(_.pick(userData, profileFields), function (err, uid) {
-		if (err) { return callback(err); }
+		if (err) {
+			return callback(err);
+		}
 
 		db.sortedSetAdd(plugin.settings.name + ':uid', uid, userData.id, function (err) {
 			callback(err, uid);
@@ -430,7 +450,7 @@ plugin.generate = function (req, res) {
 		payload = newPayload;
 	}
 
-	var token = jwt.sign(payload, plugin.settings.secret);
+	var token = 'aaabbbcccdddeeefff';
 	res.cookie(plugin.settings.cookieName, token, {
 		maxAge: 1000 * 60 * 60 * 24 * 21,
 		httpOnly: true,
@@ -454,11 +474,6 @@ plugin.reloadSettings = function (callback) {
 	meta.settings.get('session-sharing', function (err, settings) {
 		if (err) {
 			return callback(err);
-		}
-
-		if (!settings.hasOwnProperty('secret') || !settings.secret.length) {
-			winston.error('[session-sharing] JWT Secret not found, session sharing disabled.');
-			return callback();
 		}
 
 		// If "payload:parent" is found, but payloadParent is not, update the latter and delete the former
