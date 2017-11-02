@@ -1,4 +1,4 @@
-"use strict";
+'use strict';
 
 /* globals process, require, module */
 
@@ -49,13 +49,13 @@ var plugin = {
 	}
 };
 
-payloadKeys.forEach(function(key) {
+payloadKeys.forEach(function (key) {
 	plugin.settings['payload:' + key] = key;
 });
 
-plugin.init = function(params, callback) {
-	var router = params.router,
-		hostMiddleware = params.middleware;
+plugin.init = function (params, callback) {
+	var router = params.router;
+	var hostMiddleware = params.middleware;
 
 	router.get('/admin/plugins/session-sharing', hostMiddleware.admin.buildHeader, controllers.renderAdminPage);
 	router.get('/api/admin/plugins/session-sharing', controllers.renderAdminPage);
@@ -69,7 +69,7 @@ plugin.init = function(params, callback) {
 	plugin.reloadSettings(callback);
 };
 
-plugin.appendConfig = function(config, callback) {
+plugin.appendConfig = function (config, callback) {
 	config.sessionSharing = {
 		logoutRedirect: plugin.settings.logoutRedirect,
 		loginOverride: plugin.settings.loginOverride
@@ -82,11 +82,10 @@ plugin.appendConfig = function(config, callback) {
 
 SocketPlugins.sessionSharing = {};
 
-SocketPlugins.sessionSharing.showUserIds = function(socket, data, callback) {
+SocketPlugins.sessionSharing.showUserIds = function (socket, data, callback) {
 	// Retrieve the hash and find matches
 	var uids = data.uids;
 	var payload = [];
-	var match, idx;
 
 	payload.length = uids.length;
 
@@ -105,7 +104,7 @@ SocketPlugins.sessionSharing.showUserIds = function(socket, data, callback) {
 	}
 };
 
-SocketPlugins.sessionSharing.findUserByRemoteId = function(socket, data, callback) {
+SocketPlugins.sessionSharing.findUserByRemoteId = function (socket, data, callback) {
 	if (data.remoteId) {
 		plugin.getUser(data.remoteId, callback);
 	} else {
@@ -118,10 +117,10 @@ SocketPlugins.sessionSharing.findUserByRemoteId = function(socket, data, callbac
 /*
  *	Given a remoteId, show user data
  */
-plugin.getUser = function(remoteId, callback) {
+plugin.getUser = function (remoteId, callback) {
 	async.waterfall([
 		async.apply(db.sortedSetScore, plugin.settings.name + ':uid', remoteId),
-		function(uid, next) {
+		function (uid, next) {
 			if (uid) {
 				user.getUserFields(uid, ['username', 'userslug', 'picture'], next);
 			} else {
@@ -131,7 +130,7 @@ plugin.getUser = function(remoteId, callback) {
 	], callback);
 };
 
-plugin.process = function(token, callback) {
+plugin.process = function (token, callback) {
 	async.waterfall([
 		async.apply(jwt.verify, token, plugin.settings.secret),
 		async.apply(plugin.normalizePayload),
@@ -141,7 +140,7 @@ plugin.process = function(token, callback) {
 	], callback);
 };
 
-plugin.normalizePayload = function(payload, callback) {
+plugin.normalizePayload = function (payload, callback) {
 	var userData = {};
 
 	if (plugin.settings.payloadParent) {
@@ -153,7 +152,7 @@ plugin.normalizePayload = function(payload, callback) {
 		return callback(new Error('payload-invalid'));
 	}
 
-	payloadKeys.forEach(function(key) {
+	payloadKeys.forEach(function (key) {
 		var propName = plugin.settings['payload:' + key];
 		if (propName) {
 			userData[key] = payload[propName];
@@ -183,30 +182,30 @@ plugin.normalizePayload = function(payload, callback) {
 	callback(null, userData);
 };
 
-plugin.verifyUser = function(uid, callback) {
+plugin.verifyUser = function (uid, callback) {
 	// Check ban state of user, reject if banned
-	user.isBanned(uid, function(err, banned) {
+	user.isBanned(uid, function (err, banned) {
 		callback(err || banned ? new Error('banned') : null, uid);
 	});
 };
 
-plugin.findOrCreateUser = function(userData, callback) {
+plugin.findOrCreateUser = function (userData, callback) {
 	var queries = {};
 	if (userData.email && userData.email.length) {
 		queries.mergeUid = async.apply(db.sortedSetScore, 'email:uid', userData.email);
 	}
 	queries.uid = async.apply(db.sortedSetScore, plugin.settings.name + ':uid', userData.id);
 
-	async.parallel(queries, function(err, checks) {
+	async.parallel(queries, function (err, checks) {
 		if (err) { return callback(err); }
 
 		async.waterfall([
 			/* check if found something to work with */
-			function(next) {
+			function (next) {
 				if (checks.uid && !isNaN(parseInt(checks.uid, 10))) {
 					var uid = parseInt(checks.uid, 10);
 					/* check if the user with the given id actually exists */
-					return user.exists(uid, function(err, exists) {
+					return user.exists(uid, function (err, exists) {
 						/* ignore errors, but assume the user doesn't exist  */
 						if (err) {
 							winston.warn('[session-sharing] Error while testing user existance', err);
@@ -216,7 +215,7 @@ plugin.findOrCreateUser = function(userData, callback) {
 							return next(null, uid);
 						}
 						/* reference is outdated, user got deleted */
-						db.sortedSetRemove(plugin.settings.name + ':uid', userData.id, function(err) {
+						db.sortedSetRemove(plugin.settings.name + ':uid', userData.id, function (err) {
 							next(err, null);
 						});
 					});
@@ -230,23 +229,23 @@ plugin.findOrCreateUser = function(userData, callback) {
 				setImmediate(next, null, null);
 			},
 			/* create the user from payload if necessary */
-			function(uid, next) {
+			function (uid, next) {
 				winston.debug('createUser?', !uid);
-				if (! uid) {
+				if (!uid) {
 					if (plugin.settings.noRegistration === 'on') {
 						return next(new Error('no-match'));
 					}
-					return plugin.createUser(userData, function(err, uid) {
+					return plugin.createUser(userData, function (err, uid) {
 						next(err, uid, userData, true);
 					});
 				}
 				setImmediate(next, null, uid, userData, false);
-			}			
+			}
 		], callback);
 	});
 };
 
-plugin.updateUserProfile = function(uid, userData, isNewUser, callback) {
+plugin.updateUserProfile = function (uid, userData, isNewUser, callback) {
 	winston.debug('consider updateProfile?', isNewUser || plugin.settings.updateProfile === 'on');
 
 	/* even update the profile on a new account, since some fields are not initialized by NodeBB */
@@ -288,15 +287,15 @@ plugin.updateUserProfile = function(uid, userData, isNewUser, callback) {
 
 			setImmediate(next, null);
 		}
-	], function(err) {
+	], function (err) {
 		return callback(err, uid);
 	});
 };
 
-plugin.createUser = function(userData, callback) {
+plugin.createUser = function (userData, callback) {
 	winston.verbose('[session-sharing] No user found, creating a new user for this login');
 
-	user.create(_.pick(userData, profileFields), function(err, uid) {
+	user.create(_.pick(userData, profileFields), function (err, uid) {
 		if (err) { return callback(err); }
 
 		db.sortedSetAdd(plugin.settings.name + ':uid', uid, userData.id, function (err) {
@@ -305,8 +304,8 @@ plugin.createUser = function(userData, callback) {
 	});
 };
 
-plugin.addMiddleware = function(req, res, next) {
-	function handleGuest (req, res, next) {
+plugin.addMiddleware = function (req, res, next) {
+	function handleGuest(req, res, next) {
 		if (plugin.settings.guestRedirect && !req.originalUrl.startsWith(nconf.get('relative_path') + '/login?local=1')) {
 			// If a guest redirect is specified, follow it
 			res.redirect(plugin.settings.guestRedirect.replace('%1', encodeURIComponent(nconf.get('url') + req.originalUrl)));
@@ -344,9 +343,9 @@ plugin.addMiddleware = function(req, res, next) {
 		}
 
 		if (Object.keys(req.cookies).length && req.cookies.hasOwnProperty(plugin.settings.cookieName) && req.cookies[plugin.settings.cookieName].length) {
-			return plugin.process(req.cookies[plugin.settings.cookieName], function(err, uid) {
+			return plugin.process(req.cookies[plugin.settings.cookieName], function (err, uid) {
 				if (err) {
-					switch(err.message) {
+					switch (err.message) {
 						case 'banned':
 							winston.info('[session-sharing] uid ' + uid + ' is banned, not logging them in');
 							next();
@@ -377,7 +376,7 @@ plugin.addMiddleware = function(req, res, next) {
 			});
 		} else if (hasSession) {
 			// Has login session but no cookie, can assume "revalidate" behaviour
-			user.isAdministrator(req.user.uid, function(err, isAdmin) {
+			user.isAdministrator(req.user.uid, function (err, isAdmin) {
 				if (!isAdmin) {
 					req.logout();
 					res.locals.fullRefresh = true;
@@ -393,7 +392,7 @@ plugin.addMiddleware = function(req, res, next) {
 	}
 };
 
-plugin.cleanup = function(data, callback) {
+plugin.cleanup = function (data, callback) {
 	if (plugin.settings.cookieDomain) {
 		winston.verbose('[session-sharing] Clearing cookie');
 		data.res.clearCookie(plugin.settings.cookieName, {
@@ -410,7 +409,7 @@ plugin.cleanup = function(data, callback) {
 	}
 };
 
-plugin.generate = function(req, res) {
+plugin.generate = function (req, res) {
 	var payload = {};
 	payload[plugin.settings['payload:id']] = 1;
 	payload[plugin.settings['payload:username']] = 'testUser';
@@ -433,7 +432,7 @@ plugin.generate = function(req, res) {
 
 	var token = jwt.sign(payload, plugin.settings.secret);
 	res.cookie(plugin.settings.cookieName, token, {
-		maxAge: 1000*60*60*24*21,
+		maxAge: 1000 * 60 * 60 * 24 * 21,
 		httpOnly: true,
 		domain: plugin.settings.cookieDomain
 	});
@@ -441,7 +440,7 @@ plugin.generate = function(req, res) {
 	res.sendStatus(200);
 };
 
-plugin.addAdminNavigation = function(header, callback) {
+plugin.addAdminNavigation = function (header, callback) {
 	header.plugins.push({
 		route: '/plugins/session-sharing',
 		icon: 'fa-user-secret',
@@ -451,8 +450,8 @@ plugin.addAdminNavigation = function(header, callback) {
 	callback(null, header);
 };
 
-plugin.reloadSettings = function(callback) {
-	meta.settings.get('session-sharing', function(err, settings) {
+plugin.reloadSettings = function (callback) {
+	meta.settings.get('session-sharing', function (err, settings) {
 		if (err) {
 			return callback(err);
 		}
@@ -463,7 +462,7 @@ plugin.reloadSettings = function(callback) {
 		}
 
 		// If "payload:parent" is found, but payloadParent is not, update the latter and delete the former
-		if (!settings['payloadParent'] && settings['payload:parent']) {
+		if (!settings.payloadParent && settings['payload:parent']) {
 			winston.verbose('[session-sharing] Migrating payload:parent to payloadParent');
 			settings.payloadParent = settings['payload:parent'];
 			db.setObjectField('settings:session-sharing', 'payloadParent', settings.payloadParent);
