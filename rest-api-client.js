@@ -4,7 +4,7 @@ class RestApiClient {
 	constructor(baseUrl) {
 		this.client = axios.create({
 			baseURL: baseUrl,
-			timeout: 5000,
+			// timeout: 5000,
 			headers: {
 				'Content-Type': 'application/json'
 			},

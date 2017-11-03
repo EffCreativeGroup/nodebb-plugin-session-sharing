@@ -2,9 +2,10 @@
 
 /* globals process, require, module */
 
-var restApi = require('./rest-api-client')('https://api-dev.tickertocker.com/api/v1/');
+var restApiClientFactory = require('./rest-api-client');
 var meta = module.parent.require('./meta');
 var user = module.parent.require('./user');
+var groups = module.parent.require('./groups');
 var SocketPlugins = require.main.require('./src/socket.io/plugins');
 
 var _ = module.parent.require('underscore');
@@ -12,8 +13,6 @@ var winston = module.parent.require('winston');
 var async = require('async');
 var db = module.parent.require('./database');
 var nconf = module.parent.require('nconf');
-
-// var jwt = require('jsonwebtoken');
 
 var controllers = require('./lib/controllers');
 var nbbAuthController = module.parent.require('./controllers/authentication');
@@ -28,7 +27,9 @@ var profileFields = [
 	'groupTitle',
 	'birthday',
 	'signature',
-	'aboutme'
+	'signature',
+	'aboutme',
+	'role'
 ];
 var payloadKeys = profileFields.concat([
 	'id', // the uniq identifier of that account
@@ -38,11 +39,12 @@ var payloadKeys = profileFields.concat([
 ]);
 
 var plugin = {
+	restApi: null,
 	ready: false,
 	settings: {
+		restApiUrl: undefined,
 		name: 'appId',
-		cookieName: 'tickectocker_auth',
-		cookieDomain: undefined,
+		cookieName: 'tickertocker_auth',
 		behaviour: 'trust',
 		noRegistration: 'off',
 		payloadParent: undefined
@@ -61,10 +63,6 @@ plugin.init = function (params, callback) {
 	router.get('/api/admin/plugins/session-sharing', controllers.renderAdminPage);
 
 	router.get('/api/session-sharing/lookup', controllers.retrieveUser);
-
-	if (process.env.NODE_ENV === 'development') {
-		router.get('/debug/session', plugin.generate);
-	}
 
 	plugin.reloadSettings(callback);
 };
@@ -131,7 +129,12 @@ plugin.getUser = function (remoteId, callback) {
 };
 
 plugin.process = function (token, callback) {
-	restApi.setToken(token);
+	if (typeof plugin.settings.restApiUrl !== 'string' || !plugin.settings.restApiUrl.length) {
+		return callback(new Error('Provide REST API URL'));
+	}
+
+	plugin.restApi = restApiClientFactory(plugin.settings.restApiUrl);
+	plugin.restApi.setToken(token);
 
 	async.waterfall([
 		async.apply(verifyToken, token),
@@ -143,16 +146,14 @@ plugin.process = function (token, callback) {
 };
 
 function verifyToken(token, callback) {
-	console.log('verify user', token);
+	winston.info('[session-sharing]', 'Verify token', token);
 
-	restApi.currentUser()
+	plugin.restApi.currentUser()
 		.then(function (response) {
-			console.log(response.data.result);
 			callback(null, response.data.result);
 		})
-		.catch(function (err) {
-			console.error(err);
-			callback(new Error('User does not exist.'));
+		.catch(function () {
+			callback(new Error('token-invalid'));
 		});
 }
 
@@ -304,6 +305,17 @@ plugin.updateUserProfile = function (uid, userData, isNewUser, callback) {
 			}
 
 			setImmediate(next, null);
+		},
+		function (next) {
+			if (userData.role === 20) {
+				return groups.join('administrators', uid, next);
+			} else if (userData.role === 14) {
+				return groups.join('Pros', uid, next);
+			} else if (userData.role === 12) {
+				return groups.join('Investors', uid, next);
+			}
+
+			setImmediate(next, null);
 		}
 	], function (err) {
 		return callback(err, uid);
@@ -350,114 +362,92 @@ plugin.addMiddleware = function (req, res, next) {
 		delete req.session.loginLock;	// remove login lock for "revalidate" logins
 
 		return next();
-	} else {
-		// Hook into ip blacklist functionality in core
-		if (meta.blacklist.test(req.ip)) {
-			if (hasSession) {
-				req.logout();
-				res.locals.fullRefresh = true;
+	}
+
+	if (!req.cookies[plugin.settings.cookieName] || !req.cookies[plugin.settings.cookieName].length) {
+		return next();
+	}
+
+	// Hook into ip blacklist functionality in core
+	if (meta.blacklist.test(req.ip)) {
+		if (hasSession) {
+			req.logout();
+			res.locals.fullRefresh = true;
+		}
+
+		plugin.cleanup({ res });
+		return handleGuest.apply(null, arguments);
+	}
+
+	if (Object.keys(req.cookies).length && req.cookies.hasOwnProperty(plugin.settings.cookieName) && req.cookies[plugin.settings.cookieName].length) {
+		return plugin.process(req.cookies[plugin.settings.cookieName], function (err, uid) {
+			if (err) {
+				switch (err.message) {
+					case 'banned':
+						winston.info('[session-sharing] uid ' + uid + ' is banned, not logging them in');
+						next();
+						break;
+
+					case 'payload-invalid':
+						winston.warn('[session-sharing] The passed-in payload was invalid and could not be processed');
+						next();
+						break;
+
+					case 'token-invalid':
+						winston.warn('[session-sharing] The passed-in token was invalid and could not be processed');
+						plugin.cleanup({ res });
+						next();
+						break;
+
+					case 'no-match':
+						winston.info('[session-sharing] Payload valid, but local account not found.  Assuming guest.');
+						handleGuest.call(null, req, res, next);
+						break;
+
+					default:
+						winston.warn('[session-sharing] Error encountered while parsing token: ' + err.message);
+						next();
+						break;
+				}
+
+				return;
 			}
 
-			plugin.cleanup({ res: res });
-			return handleGuest.apply(null, arguments);
-		}
-
-		if (Object.keys(req.cookies).length && req.cookies.hasOwnProperty(plugin.settings.cookieName) && req.cookies[plugin.settings.cookieName].length) {
-			return plugin.process(req.cookies[plugin.settings.cookieName], function (err, uid) {
-				if (err) {
-					switch (err.message) {
-						case 'banned':
-							winston.info('[session-sharing] uid ' + uid + ' is banned, not logging them in');
-							next();
-							break;
-						case 'payload-invalid':
-							winston.warn('[session-sharing] The passed-in payload was invalid and could not be processed');
-							next();
-							break;
-						case 'no-match':
-							winston.info('[session-sharing] Payload valid, but local account not found.  Assuming guest.');
-							handleGuest.call(null, req, res, next);
-							break;
-						default:
-							winston.warn('[session-sharing] Error encountered while parsing token: ' + err.message);
-							next();
-							break;
-					}
-
-					return;
-				}
-
-				winston.verbose('[session-sharing] Processing login for uid ' + uid + ', path ' + req.originalUrl);
-				req.uid = uid;
-				nbbAuthController.doLogin(req, uid, function () {
-					req.session.loginLock = true;
-					res.redirect(req.originalUrl);
-				});
+			winston.verbose('[session-sharing] Processing login for uid ' + uid + ', path ' + req.originalUrl);
+			req.uid = uid;
+			nbbAuthController.doLogin(req, uid, function () {
+				req.session.loginLock = true;
+				res.redirect(req.originalUrl);
 			});
-		} else if (hasSession) {
-			// Has login session but no cookie, can assume "revalidate" behaviour
-			user.isAdministrator(req.user.uid, function (err, isAdmin) {
-				if (!isAdmin) {
-					req.logout();
-					res.locals.fullRefresh = true;
-					handleGuest(req, res, next);
-				} else {
-					// Admins can bypass
-					return next();
-				}
-			});
-		} else {
-			handleGuest.apply(null, arguments);
-		}
+		});
+	}
+
+	if (hasSession) {
+		// Has login session but no cookie, can assume "revalidate" behaviour
+		user.isAdministrator(req.user.uid, function (err, isAdmin) {
+			if (!isAdmin) {
+				req.logout();
+				res.locals.fullRefresh = true;
+				handleGuest(req, res, next);
+			} else {
+				// Admins can bypass
+				return next();
+			}
+		});
+	} else {
+		handleGuest.apply(null, arguments);
 	}
 };
 
 plugin.cleanup = function (data, callback) {
-	if (plugin.settings.cookieDomain) {
-		winston.verbose('[session-sharing] Clearing cookie');
-		data.res.clearCookie(plugin.settings.cookieName, {
-			domain: plugin.settings.cookieDomain,
-			expires: new Date(),
-			path: '/'
-		});
-	}
+	winston.verbose('[session-sharing] Clearing cookie');
+	data.res.clearCookie(plugin.settings.cookieName);
 
-	if (typeof callback === 'function') {
-		callback();
-	} else {
+	if (typeof callback !== 'function') {
 		return true;
 	}
-};
 
-plugin.generate = function (req, res) {
-	var payload = {};
-	payload[plugin.settings['payload:id']] = 1;
-	payload[plugin.settings['payload:username']] = 'testUser';
-	payload[plugin.settings['payload:email']] = 'testUser@example.org';
-	payload[plugin.settings['payload:firstName']] = 'Test';
-	payload[plugin.settings['payload:lastName']] = 'User';
-	payload[plugin.settings['payload:location']] = 'Testlocation';
-	payload[plugin.settings['payload:birthday']] = '04/01/1981';
-	payload[plugin.settings['payload:website']] = 'nodebb.org';
-	payload[plugin.settings['payload:aboutme']] = 'I am just testing';
-	payload[plugin.settings['payload:signature']] = 'T User';
-	payload[plugin.settings['payload:groupTitle']] = 'TestUsers';
-
-	if (plugin.settings['payloadParent'] || plugin.settings['payload:parent']) {
-		var parentKey = plugin.settings['payloadParent'] || plugin.settings['payload:parent'];
-		var newPayload = {};
-		newPayload[parentKey] = payload;
-		payload = newPayload;
-	}
-
-	var token = 'aaabbbcccdddeeefff';
-	res.cookie(plugin.settings.cookieName, token, {
-		maxAge: 1000 * 60 * 60 * 24 * 21,
-		httpOnly: true,
-		domain: plugin.settings.cookieDomain
-	});
-
-	res.sendStatus(200);
+	callback();
 };
 
 plugin.addAdminNavigation = function (header, callback) {
@@ -489,6 +479,7 @@ plugin.reloadSettings = function (callback) {
 		}
 
 		winston.info('[session-sharing] Settings OK');
+
 		plugin.settings = _.defaults(_.pick(settings, Boolean), plugin.settings);
 		plugin.ready = true;
 
