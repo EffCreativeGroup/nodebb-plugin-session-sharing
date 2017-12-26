@@ -37,7 +37,7 @@ const payloadKeys = profileFields.concat([
   'lastName', // dto.
   'picture'
 ]);
-
+const profileFieldsDefaults = nconf.get('session-sharing:profileFieldsDefaults') || {};
 const plugin = {
   restApi: null,
   ready: false,
@@ -54,6 +54,12 @@ const plugin = {
 payloadKeys.forEach(function (key) {
   plugin.settings[`payload:${key}`] = key;
 });
+
+if (profileFieldsDefaults !== null && profileFieldsDefaults !== undefined && typeof profileFieldsDefaults === 'object') {
+  Object.keys(profileFieldsDefaults).forEach(function (key) {
+    plugin.settings[`payload:${key}`] = profileFieldsDefaults[key];
+  });
+}
 
 plugin.init = function ({ router, middleware: hostMiddleware }, callback) {
   router.get('/admin/plugins/session-sharing', hostMiddleware.admin.buildHeader, controllers.renderAdminPage);
@@ -134,9 +140,15 @@ plugin.getUser = function (remoteId, callback) {
 };
 
 plugin.process = function (token, callback) {
+  if (!plugin.settings.restApiUrl) {
+    plugin.settings.restApiUrl = nconf.get('session-sharing:restApiUrl');
+  }
+
   if (typeof plugin.settings.restApiUrl !== 'string' || !plugin.settings.restApiUrl.length) {
     return callback(new Error('Provide REST API URL'));
   }
+
+  console.log(plugin.settings.restApiUrl);
 
   plugin.restApi = restApiClientFactory(plugin.settings.restApiUrl);
   plugin.restApi.setToken(token);
@@ -157,7 +169,7 @@ function verifyToken(token, callback) {
     .then(function (response) {
       callback(null, response.data.result);
     })
-    .catch(function () {
+    .catch(function (e) {
       callback(new Error('token-invalid'));
     });
 }
