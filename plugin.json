@@ -1,7 +1,7 @@
 {
   "id": "nodebb-plugin-session-sharing",
   "url": "https://github.com/EffCreativeGroup/nodebb-plugin-session-sharing",
-  "library": "./library.js",
+  "library": "./index.js",
   "hooks": [
     { "hook": "filter:router.page", "method": "addMiddleware" },
     { "hook": "static:app.load", "method": "init" },
