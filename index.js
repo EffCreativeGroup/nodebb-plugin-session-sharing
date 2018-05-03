@@ -17,6 +17,18 @@ const nconf = module.parent.require('nconf');
 const controllers = require('./lib/controllers');
 const nbbAuthController = module.parent.require('./controllers/authentication');
 
+const Roles = Object.freeze({
+  Investor: 12,
+  Leader: 14,
+  Admin: 20
+});
+
+const Groups = Object.freeze({
+  Investors: 'Investors',
+  Leaders: 'Leaders',
+  Admins: 'administrators'
+});
+
 /* all the user profile fields that can be passed to user.updateProfile */
 const profileFields = [
   'username',
@@ -326,12 +338,16 @@ plugin.updateUserProfile = function (uid, userData, isNewUser, callback) {
       setImmediate(next, null);
     },
     function (next) {
-      if (userData.role === 20) {
-        return groups.join('administrators', uid, next);
-      } else if (userData.role === 14) {
-        return groups.join('Pros', uid, next);
-      } else if (userData.role === 12) {
-        return groups.join('Investors', uid, next);
+      if (userData.role === Roles.Admin) {
+        return groups.join(Groups.Admins, uid, next);
+      }
+
+      if (userData.role === Roles.Leader) {
+        return groups.join(Groups.Leaders, uid, next);
+      }
+
+      if (userData.role === Roles.Investor) {
+        return groups.join(Groups.Investors, uid, next);
       }
 
       setImmediate(next, null);
