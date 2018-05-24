@@ -1,0 +1,25 @@
+{
+  "id": "nodebb-plugin-session-sharing",
+  "url": "https://github.com/EffCreativeGroup/nodebb-plugin-session-sharing",
+  "library": "./index.js",
+  "hooks": [
+    { "hook": "filter:router.page", "method": "addMiddleware" },
+    { "hook": "static:app.load", "method": "init" },
+    { "hook": "filter:admin.header.build", "method": "addAdminNavigation" },
+    { "hook": "static:user.loggedOut", "method": "cleanup" },
+    { "hook": "filter:config.get", "method": "appendConfig" }
+  ],
+  "less": [
+    "static/style.less"
+  ],
+  "scripts": [
+    "static/lib/main.js"
+  ],
+  "acpScripts": [
+    "static/lib/admin.js"
+  ],
+  "upgrades": [
+    "upgrades/session_sharing_hash_to_zset.js"
+  ],
+  "templates": "static/templates"
+}
