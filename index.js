@@ -160,8 +160,6 @@ plugin.process = function (token, callback) {
     return callback(new Error('Provide REST API URL'));
   }
 
-  console.log(plugin.settings.restApiUrl);
-
   plugin.restApi = restApiClientFactory(plugin.settings.restApiUrl);
   plugin.restApi.setToken(token);
 
